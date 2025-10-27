@@ -385,6 +385,7 @@ class PrintController {
       // Konversi logo ke base64
       // Try multiple possible logo locations
       const possibleLogoPaths = [
+        path.join(__dirname, "../../../../FE/ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../../ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../public/logo_bnw.png"),
         "C:\\inetpub\\wwwroot\\ePemusnahanLimbah\\logo_bnw.png",
