@@ -15,14 +15,14 @@ class PrintController {
     if (!link) {
       return res.status(400).json({
         success: false,
-        error: "Missing required parameter: link"
+        error: "Missing required parameter: link",
       });
     }
 
     if (!createdAt) {
       return res.status(400).json({
         success: false,
-        error: "Missing required parameter: createdAt"
+        error: "Missing required parameter: createdAt",
       });
     }
 
@@ -34,24 +34,24 @@ class PrintController {
         path.join(__dirname, "../../../ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../public/logo_bnw.png"),
         "C:\\inetpub\\wwwroot\\ePemusnahanLimbah\\logo_bnw.png",
-        path.join(__dirname, "../../../ePemusnahanLimbah/logo_bnw.png")
+        path.join(__dirname, "../../../ePemusnahanLimbah/logo_bnw.png"),
       ];
-      
+
       let logoBase64 = "";
       let logoPath = null;
-      
+
       for (const testPath of possibleLogoPaths) {
         if (fs.existsSync(testPath)) {
           logoPath = testPath;
           break;
         }
       }
-      
+
       if (logoPath) {
         const logoBuffer = fs.readFileSync(logoPath);
         logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
       } else {
-        console.warn('PrintController: logo_bnw.png not found in any expected location:', possibleLogoPaths);
+        console.warn("PrintController: logo_bnw.png not found in any expected location:", possibleLogoPaths);
       }
 
       // Launch browser
@@ -59,24 +59,23 @@ class PrintController {
         headless: true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
-      
+
       const page = await browser.newPage();
 
       // If the incoming request carried an Authorization header, pass the token
       // into the headless browser so the frontend page can authenticate itself
       // (the app uses sessionStorage/localStorage for tokens). This prevents
       // puppeteer from being redirected to the login page.
-      const authHeader = req.headers.authorization || req.headers.Authorization || '';
-      const token = authHeader && authHeader.toString().startsWith('Bearer ')
-        ? authHeader.toString().slice(7)
-        : authHeader;
+      const authHeader = req.headers.authorization || req.headers.Authorization || "";
+      const token =
+        authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
 
       if (!token) {
-        console.warn('PrintController: No authorization token found in request headers');
+        console.warn("PrintController: No authorization token found in request headers");
         if (browser) await browser.close();
         return res.status(401).json({
           success: false,
-          error: "Authentication token required. Please include Authorization header with Bearer token."
+          error: "Authentication token required. Please include Authorization header with Bearer token.",
         });
       }
 
@@ -85,9 +84,9 @@ class PrintController {
         // Inject token into localStorage/sessionStorage before any script runs
         await page.evaluateOnNewDocument((t) => {
           try {
-            localStorage.setItem('token', t);
-            sessionStorage.setItem('access_token', t);
-            
+            localStorage.setItem("token", t);
+            sessionStorage.setItem("access_token", t);
+
             // Many SPAs also require user data in storage to recognize authenticated state.
             // Create a minimal user object that matches what the SPA expects.
             const mockUser = {
@@ -96,10 +95,10 @@ class PrintController {
               Jabatan: "System",
               role: "Pemohon",
               emp_DeptID: "SYS",
-              emp_JobLevelID: "USR"
+              emp_JobLevelID: "USR",
             };
-            localStorage.setItem('user', JSON.stringify(mockUser));
-            sessionStorage.setItem('user', JSON.stringify(mockUser));
+            localStorage.setItem("user", JSON.stringify(mockUser));
+            sessionStorage.setItem("user", JSON.stringify(mockUser));
           } catch (e) {
             // ignore storage errors
           }
@@ -111,82 +110,88 @@ class PrintController {
         // Enable request interception to attach Authorization header for SPA XHR/fetch calls.
         try {
           await page.setRequestInterception(true);
-          page.on('request', (req) => {
+          page.on("request", (req) => {
             try {
               const headers = Object.assign({}, req.headers());
-              headers['Authorization'] = `Bearer ${token}`;
+              headers["Authorization"] = `Bearer ${token}`;
               req.continue({ headers });
             } catch (e) {
-              try { req.continue(); } catch (__) { /* noop */ }
+              try {
+                req.continue();
+              } catch (__) {
+                /* noop */
+              }
             }
           });
         } catch (e) {
-          console.warn('PrintController: unable to enable request interception:', e.message || e);
+          console.warn("PrintController: unable to enable request interception:", e.message || e);
         }
 
         // Log partial token for debugging (do not log full token in production)
         try {
-          const tPreview = token.toString().slice(0, 8) + '...' + token.toString().slice(-6);
-          console.log('PrintController: received token, injecting into page (preview):', tPreview);
+          const tPreview = token.toString().slice(0, 8) + "..." + token.toString().slice(-6);
+          console.log("PrintController: received token, injecting into page (preview):", tPreview);
         } catch (e) {
           /* noop */
         }
       } catch (e) {
-        console.warn('Failed to set up authentication in puppeteer page:', e.message || e);
+        console.warn("Failed to set up authentication in puppeteer page:", e.message || e);
       }
 
-      console.log('PrintController: navigating to link:', link);
+      console.log("PrintController: navigating to link:", link);
 
       // Capture console messages from the page
-      page.on('console', msg => {
+      page.on("console", (msg) => {
         const type = msg.type();
         const text = msg.text();
         console.log(`[Puppeteer Console ${type}]:`, text);
       });
 
       // Capture page errors
-      page.on('pageerror', error => {
-        console.error('[Puppeteer Page Error]:', error.message);
+      page.on("pageerror", (error) => {
+        console.error("[Puppeteer Page Error]:", error.message);
       });
 
       // Capture failed requests
-      page.on('requestfailed', request => {
-        console.error('[Puppeteer Request Failed]:', request.url(), request.failure().errorText);
+      page.on("requestfailed", (request) => {
+        console.error("[Puppeteer Request Failed]:", request.url(), request.failure().errorText);
       });
 
       // Navigate ke halaman print - add longer timeout and wait for auth
-      await page.goto(link, { 
+      await page.goto(link, {
         waitUntil: "networkidle0",
-        timeout: 60000 
+        timeout: 60000,
       });
 
       // Wait a bit for authentication to complete
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Quick diagnostic: verify that the expected print content is present.
       // Many SPA routes will redirect to login when auth is missing/invalid. Capture
       // a screenshot and HTML dump if the expected marker text is not found so we
       // can inspect what was rendered (login page vs actual document).
       try {
-        const bodyText = await page.evaluate(() => document.body.innerText || '');
-        const EXPECTED_MARKER = 'Mengajukan permohonan pemusnahan untuk Limbah B3';
+        const bodyText = await page.evaluate(() => document.body.innerText || "");
+        const EXPECTED_MARKER = "Mengajukan permohonan pemusnahan untuk Limbah B3";
         if (!bodyText.includes(EXPECTED_MARKER)) {
-          const safeId = requestId ? String(requestId).replace(/[^a-zA-Z0-9-_]/g, '_') : Date.now();
-          const outDir = path.join(__dirname, '../../logs');
+          const safeId = requestId ? String(requestId).replace(/[^a-zA-Z0-9-_]/g, "_") : Date.now();
+          const outDir = path.join(__dirname, "../../logs");
           if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
           const screenshotPath = path.join(outDir, `print_debug_${safeId}.png`);
           const htmlPath = path.join(outDir, `print_debug_${safeId}.html`);
           try {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             const html = await page.content();
-            fs.writeFileSync(htmlPath, html, 'utf8');
-            console.warn(`PrintController: expected marker not found. Saved screenshot -> ${screenshotPath} and HTML -> ${htmlPath}`);
+            fs.writeFileSync(htmlPath, html, "utf8");
+            console.warn(
+              `PrintController: expected marker not found. Saved screenshot -> ${screenshotPath} and HTML -> ${htmlPath}`
+            );
           } catch (dumpErr) {
-            console.warn('PrintController: failed to capture debug artifacts:', dumpErr.message || dumpErr);
+            console.warn("PrintController: failed to capture debug artifacts:", dumpErr.message || dumpErr);
           }
         }
       } catch (diagErr) {
-        console.warn('PrintController: diagnostic check failed:', diagErr.message || diagErr);
+        console.warn("PrintController: diagnostic check failed:", diagErr.message || diagErr);
       }
 
       // Inject custom styles for clean PDF output
@@ -283,14 +288,14 @@ class PrintController {
 
       // Determine revisi berdasarkan createdAt
       const createdDate = new Date(createdAt);
-      
+
       // Format tanggal ke DD/MM/YYYY
-      const formattedDate = createdDate.toLocaleDateString('id-ID', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
+      const formattedDate = createdDate.toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
       });
-      
+
       const revisi = "01";
       const kode = "FO.KL.000043";
 
@@ -299,7 +304,7 @@ class PrintController {
         format: "A4",
         displayHeaderFooter: true,
         printBackground: true,
-        
+
         // Header template
         headerTemplate: `
           <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
@@ -315,7 +320,7 @@ class PrintController {
             </tr>
           </table>
         `,
-        
+
         // Footer template
         footerTemplate: `
           <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
@@ -333,7 +338,7 @@ class PrintController {
             </tr>
           </table>
         `,
-        
+
         // Margins
         margin: {
           top: "120px",
@@ -348,22 +353,18 @@ class PrintController {
 
       // Set response headers
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename=Permohonan_Pemusnahan_${requestId}.pdf`
-      );
-      
+      res.setHeader("Content-Disposition", `inline; filename=Permohonan_Pemusnahan_${requestId}.pdf`);
+
       // Send PDF
       res.end(pdfBuffer);
-      
     } catch (error) {
       console.error("Error during printPermohonanPemusnahan:", error);
-      
+
       // Close browser if still open
       if (browser) {
         await browser.close();
       }
-      
+
       res.status(500).json({
         success: false,
         error: "An error occurred during PDF generation.",
@@ -388,25 +389,25 @@ class PrintController {
         path.join(__dirname, "../../../../FE/ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../../ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../public/logo_bnw.png"),
-        "C:\\inetpub\\wwwroot\\ePemusnahanLimbah\\logo_bnw.png",
-        path.join(__dirname, "../../../ePemusnahanLimbah/logo_bnw.png")
+        "C:\\inetpub\\wwwroot\\ePemusnahanLimbah-dev\\logo_bnw.png",
+        path.join(__dirname, "../../../ePemusnahanLimbah-dev/logo_bnw.png"),
       ];
-      
+
       let logoBase64 = "";
       let logoPath = null;
-      
+
       for (const testPath of possibleLogoPaths) {
         if (fs.existsSync(testPath)) {
           logoPath = testPath;
           break;
         }
       }
-      
+
       if (logoPath) {
         const logoBuffer = fs.readFileSync(logoPath);
         logoBase64 = `data:image/png;base64,${logoBuffer.toString("base64")}`;
       } else {
-        console.warn('PrintController: logo_bnw.png not found in any expected location:', possibleLogoPaths);
+        console.warn("PrintController: logo_bnw.png not found in any expected location:", possibleLogoPaths);
       }
 
       // Launch browser
@@ -414,26 +415,25 @@ class PrintController {
         headless: true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
-      
+
       const page = await browser.newPage();
 
       // If the incoming request carried an Authorization header, pass the token
       // into the headless browser so the frontend page can authenticate itself
       // (the app uses sessionStorage/localStorage for tokens). This prevents
       // puppeteer from being redirected to the login page.
-      const authHeader = req.headers.authorization || req.headers.Authorization || '';
-      const token = authHeader && authHeader.toString().startsWith('Bearer ')
-        ? authHeader.toString().slice(7)
-        : authHeader;
+      const authHeader = req.headers.authorization || req.headers.Authorization || "";
+      const token =
+        authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
 
       if (token) {
         try {
           // Inject token into localStorage/sessionStorage before any script runs
           await page.evaluateOnNewDocument((t) => {
             try {
-              localStorage.setItem('token', t);
-              sessionStorage.setItem('access_token', t);
-              
+              localStorage.setItem("token", t);
+              sessionStorage.setItem("access_token", t);
+
               // Many SPAs also require user data in storage to recognize authenticated state.
               // Create a minimal user object that matches what the SPA expects.
               const mockUser = {
@@ -442,10 +442,10 @@ class PrintController {
                 Jabatan: "System",
                 role: "Pemohon",
                 emp_DeptID: "SYS",
-                emp_JobLevelID: "USR"
+                emp_JobLevelID: "USR",
               };
-              localStorage.setItem('user', JSON.stringify(mockUser));
-              sessionStorage.setItem('user', JSON.stringify(mockUser));
+              localStorage.setItem("user", JSON.stringify(mockUser));
+              sessionStorage.setItem("user", JSON.stringify(mockUser));
             } catch (e) {
               // ignore storage errors
             }
@@ -457,83 +457,89 @@ class PrintController {
           // Enable request interception to attach Authorization header for SPA XHR/fetch calls.
           try {
             await page.setRequestInterception(true);
-            page.on('request', (req) => {
+            page.on("request", (req) => {
               try {
                 const headers = Object.assign({}, req.headers());
-                if (token) headers['Authorization'] = `Bearer ${token}`;
+                if (token) headers["Authorization"] = `Bearer ${token}`;
                 req.continue({ headers });
               } catch (e) {
-                try { req.continue(); } catch (__) { /* noop */ }
+                try {
+                  req.continue();
+                } catch (__) {
+                  /* noop */
+                }
               }
             });
           } catch (e) {
-            console.warn('PrintController: unable to enable request interception:', e.message || e);
+            console.warn("PrintController: unable to enable request interception:", e.message || e);
           }
 
           // Log partial token for debugging (do not log full token in production)
           try {
-            const tPreview = token.toString().slice(0, 8) + '...' + token.toString().slice(-6);
-            console.log('PrintController: received token, injecting into page (preview):', tPreview);
+            const tPreview = token.toString().slice(0, 8) + "..." + token.toString().slice(-6);
+            console.log("PrintController: received token, injecting into page (preview):", tPreview);
           } catch (e) {
             /* noop */
           }
         } catch (e) {
-          console.warn('Failed to inject auth token into puppeteer page:', e.message || e);
+          console.warn("Failed to inject auth token into puppeteer page:", e.message || e);
         }
       }
 
-      console.log('PrintController: navigating to link:', link);
+      console.log("PrintController: navigating to link:", link);
 
       // Capture console messages from the page
-      page.on('console', msg => {
+      page.on("console", (msg) => {
         const type = msg.type();
         const text = msg.text();
         console.log(`[Puppeteer Console ${type}]:`, text);
       });
 
       // Capture page errors
-      page.on('pageerror', error => {
-        console.error('[Puppeteer Page Error]:', error.message);
+      page.on("pageerror", (error) => {
+        console.error("[Puppeteer Page Error]:", error.message);
       });
 
       // Capture failed requests
-      page.on('requestfailed', request => {
-        console.error('[Puppeteer Request Failed]:', request.url(), request.failure().errorText);
+      page.on("requestfailed", (request) => {
+        console.error("[Puppeteer Request Failed]:", request.url(), request.failure().errorText);
       });
 
       // Navigate ke halaman print - add longer timeout and wait for auth
-      await page.goto(link, { 
+      await page.goto(link, {
         waitUntil: "networkidle0",
-        timeout: 60000 
+        timeout: 60000,
       });
 
       // Wait a bit for authentication to complete
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Quick diagnostic: verify that the expected print content is present.
       // Many SPA routes will redirect to login when auth is missing/invalid. Capture
       // a screenshot and HTML dump if the expected marker text is not found so we
       // can inspect what was rendered (login page vs actual document).
       try {
-        const bodyText = await page.evaluate(() => document.body.innerText || '');
-        const EXPECTED_MARKER = 'Telah dilakukan proses verifikasi dan atau perusakan limbah B3';
+        const bodyText = await page.evaluate(() => document.body.innerText || "");
+        const EXPECTED_MARKER = "Telah dilakukan proses verifikasi dan atau perusakan limbah B3";
         if (!bodyText.includes(EXPECTED_MARKER)) {
-          const safeId = beritaAcaraId ? String(beritaAcaraId).replace(/[^a-zA-Z0-9-_]/g, '_') : Date.now();
-          const outDir = path.join(__dirname, '../../logs');
+          const safeId = beritaAcaraId ? String(beritaAcaraId).replace(/[^a-zA-Z0-9-_]/g, "_") : Date.now();
+          const outDir = path.join(__dirname, "../../logs");
           if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
           const screenshotPath = path.join(outDir, `print_berita_acara_debug_${safeId}.png`);
           const htmlPath = path.join(outDir, `print_berita_acara_debug_${safeId}.html`);
           try {
             await page.screenshot({ path: screenshotPath, fullPage: true });
             const html = await page.content();
-            fs.writeFileSync(htmlPath, html, 'utf8');
-            console.warn(`PrintController: expected marker not found. Saved screenshot -> ${screenshotPath} and HTML -> ${htmlPath}`);
+            fs.writeFileSync(htmlPath, html, "utf8");
+            console.warn(
+              `PrintController: expected marker not found. Saved screenshot -> ${screenshotPath} and HTML -> ${htmlPath}`
+            );
           } catch (dumpErr) {
-            console.warn('PrintController: failed to capture debug artifacts:', dumpErr.message || dumpErr);
+            console.warn("PrintController: failed to capture debug artifacts:", dumpErr.message || dumpErr);
           }
         }
       } catch (diagErr) {
-        console.warn('PrintController: diagnostic check failed:', diagErr.message || diagErr);
+        console.warn("PrintController: diagnostic check failed:", diagErr.message || diagErr);
       }
 
       // Inject custom styles for clean PDF output
@@ -630,14 +636,14 @@ class PrintController {
 
       // Determine revisi berdasarkan createdAt
       const createdDate = new Date(createdAt);
-      
+
       // Format tanggal ke DD/MM/YYYY
-      const formattedDate = createdDate.toLocaleDateString('id-ID', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
+      const formattedDate = createdDate.toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
       });
-      
+
       const revisi = "01";
       const kode = "FO.KL.000041";
 
@@ -646,7 +652,7 @@ class PrintController {
         format: "A4",
         displayHeaderFooter: true,
         printBackground: true,
-        
+
         // Header template
         headerTemplate: `
           <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
@@ -662,7 +668,7 @@ class PrintController {
             </tr>
           </table>
         `,
-        
+
         // Footer template
         footerTemplate: `
           <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
@@ -680,7 +686,7 @@ class PrintController {
             </tr>
           </table>
         `,
-        
+
         // Margins
         margin: {
           top: "120px",
@@ -695,22 +701,18 @@ class PrintController {
 
       // Set response headers
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename=Berita_Acara_Pemusnahan_${beritaAcaraId}.pdf`
-      );
-      
+      res.setHeader("Content-Disposition", `inline; filename=Berita_Acara_Pemusnahan_${beritaAcaraId}.pdf`);
+
       // Send PDF
       res.end(pdfBuffer);
-      
     } catch (error) {
       console.error("Error during printBeritaAcaraPemusnahan:", error);
-      
+
       // Close browser if still open
       if (browser) {
         await browser.close();
       }
-      
+
       res.status(500).json({
         success: false,
         error: "An error occurred during PDF generation.",
