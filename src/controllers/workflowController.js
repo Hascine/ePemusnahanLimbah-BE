@@ -463,7 +463,7 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                 // Special handling for verification step (Appr_No === 3)
                 if (String(stepKey) === '3') {
                     // Build four-role group: pelaksana_pemohon, supervisor_pemohon, pelaksana_hse, supervisor_hse
-                    // Determine pemohon-side department mapping: 'NT' or 'WH' indicate requester's department
+                    // Pemohon-side department is determined by requester's department
                     const selected = {
                         pelaksana_pemohon: null,
                         supervisor_pemohon: null,
@@ -489,7 +489,7 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                                 }
                             }
 
-                            // Pemohon side: Appr_DeptID matches requester's department (which could be 'NT' or 'WH' depending on request)
+                            // Pemohon side: Appr_DeptID matches requester's department
                             if (requesterDeptId && apprDept === String(requesterDeptId).toUpperCase()) {
                                 if (!selected.pelaksana_pemohon && jobLevel === 7) {
                                     selected.pelaksana_pemohon = { approver_id: a.Appr_ID, approver_name: a.emp_Name, approver_dept_id: a.Appr_DeptID, approver_cc: a.Appr_CC, approver_job_level: jobLevel };
