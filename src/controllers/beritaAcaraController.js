@@ -345,17 +345,7 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
 const createBeritaAcara = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const {
-      bagian,
-      tanggal,
-      waktu,
-      lokasi_verifikasi,
-      pelaksana_bagian,
-      supervisor_bagian,
-      pelaksana_hse,
-      supervisor_hse,
-      selectedRequestIds,
-    } = req.body;
+    const { bagian, tanggal, waktu, lokasi_verifikasi, selectedRequestIds } = req.body;
     const { user, delegatedUser } = req;
 
     // Validate authenticated user presence
@@ -469,6 +459,54 @@ const createBeritaAcara = async (req, res) => {
       return res.status(404).json({ message: "No completed requests found to generate a Berita Acara." });
     }
 
+    // Find the latest completed request (by created_at) to extract verification data
+    const latestRequest = completedRequests.reduce((latest, current) => {
+      if (!latest) return current;
+      const latestDate = new Date(latest.created_at);
+      const currentDate = new Date(current.created_at);
+      return currentDate > latestDate ? current : latest;
+    }, null);
+
+    // Fetch approval history for the latest request to get verification field data
+    let pelaksana_bagian = null;
+    let supervisor_bagian = null;
+    let pelaksana_hse = null;
+    let supervisor_hse = null;
+
+    if (latestRequest) {
+      const approvalHistories = await ApprovalHistory.findAll({
+        where: {
+          request_id: latestRequest.request_id,
+          status: "Approved",
+        },
+        include: [
+          {
+            model: ApprovalWorkflowStep,
+            where: {
+              step_name: "Verifikasi Lapangan",
+            },
+          },
+        ],
+        transaction,
+      });
+
+      // Extract verifier data based on roles
+      approvalHistories.forEach((h) => {
+        const jabatan = h.approver_jabatan || "";
+        const approverName = h.approver_name || "";
+
+        if (jabatan.includes("VERIF_ROLE:1")) {
+          pelaksana_bagian = approverName;
+        } else if (jabatan.includes("VERIF_ROLE:2")) {
+          supervisor_bagian = approverName;
+        } else if (jabatan.includes("VERIF_ROLE:3")) {
+          pelaksana_hse = approverName;
+        } else if (jabatan.includes("VERIF_ROLE:4")) {
+          supervisor_hse = approverName;
+        }
+      });
+    }
+
     // Determine the appropriate signing workflow based on the requests
     const signingWorkflowId = await determineSigningWorkflow(completedRequests);
 
@@ -496,6 +534,7 @@ const createBeritaAcara = async (req, res) => {
       tanggal: tanggalDate ? new Date(jakartaTime.formatJakartaISO(tanggalDate)) : null,
       waktu: waktuDate ? new Date(jakartaTime.formatJakartaISO(waktuDate)) : null,
       lokasi_verifikasi,
+      // Auto-fill from latest request's verification data
       pelaksana_bagian: pelaksana_bagian || null,
       supervisor_bagian: supervisor_bagian || null,
       pelaksana_hse: pelaksana_hse || null,
