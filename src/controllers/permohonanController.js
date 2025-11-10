@@ -414,9 +414,13 @@ const getAllPermohonan = async (req, res) => {
             .filter(deptId => deptId != null);
           
           if (userApprovalSteps.length > 0) {
-            // Use external API data to filter. Special-case step 1 department manager check, but
-            // allow step 3 (Verifikasi) to be visible to users listed for Appr_No=3 regardless of department.
+            // Build query to get pending approvals based on step levels and additional filters
+            const canApproveManager = userApprovalSteps.includes(1);
             const canApproveAPJ = userApprovalSteps.includes(2);
+            const canApproveVerification = userApprovalSteps.includes(3);
+            const canApproveHSE = userApprovalSteps.includes(4);
+
+            // Always include CurrentStep with step_level filter
 
             queryOptions.include.push({
               model: ApprovalWorkflowStep,
@@ -433,17 +437,21 @@ const getAllPermohonan = async (req, res) => {
               }]
             });
             
-            // If user is a department manager, add additional filtering by department
-            if (userDepartmentApprovals.length > 0) {
-              // Add condition to only show requests from departments this manager can approve
-              // This applies to step 1; step 3 (verification) will still be included by step_level filter
-              queryOptions.where.bagian = {
-                [require('sequelize').Op.in]: userDepartmentApprovals
-              };
+            // Build complex WHERE conditions using OR logic for different step levels
+            const Op = require('sequelize').Op;
+            const stepConditions = [];
+
+            // Step 1 (Department Manager): filter by department
+            if (canApproveManager && userDepartmentApprovals.length > 0) {
+              stepConditions.push({
+                [Op.and]: [
+                  { '$CurrentStep.step_level$': 1 },
+                  { bagian: { [Op.in]: userDepartmentApprovals } }
+                ]
+              });
             }
 
-            // If the user can approve APJ (step 2), restrict results to golongan categories
-            // that map to the APJ department(s) the user has. For example, PN1 -> prekursor/oot, QA -> recall.
+            // Step 2 (APJ): filter by golongan based on department
             if (canApproveAPJ) {
               const userAPJDepts = appItems
                 .filter(item => item.Appr_ID === filteringUser.log_NIK && item.Appr_No === 2)
@@ -451,24 +459,52 @@ const getAllPermohonan = async (req, res) => {
                 .filter(Boolean);
 
               if (userAPJDepts.length > 0) {
-                const Op = require('sequelize').Op;
-                const whereGolonganConditions = [];
+                const golonganConditions = [];
+                
                 if (userAPJDepts.includes('PN1')) {
-                  whereGolonganConditions.push({ nama: { [Op.iLike]: '%prekursor%' } });
-                  whereGolonganConditions.push({ nama: { [Op.iLike]: '%oot%' } });
+                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%prekursor%' } });
+                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%oot%' } });
                 }
                 if (userAPJDepts.includes('QA')) {
-                  whereGolonganConditions.push({ nama: { [Op.iLike]: '%recall%' } });
+                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%recall%' } });
                 }
                 if (userAPJDepts.includes('HC')) {
-                  // PJKPO (HC department) handles produk pangan requests
-                  // Filter for requests where is_produk_pangan = true
-                  queryOptions.where.is_produk_pangan = true;
+                  golonganConditions.push({ is_produk_pangan: true });
                 }
 
-                if (whereGolonganConditions.length > 0) {
-                  queryOptions.include.push({ model: GolonganLimbah, required: true, where: { [Op.or]: whereGolonganConditions } });
+                if (golonganConditions.length > 0) {
+                  stepConditions.push({
+                    [Op.and]: [
+                      { '$CurrentStep.step_level$': 2 },
+                      { [Op.or]: golonganConditions }
+                    ]
+                  });
                 }
+              }
+            }
+
+            // Step 3 (Verifikasi Lapangan): no additional filter, all verification requests visible
+            if (canApproveVerification) {
+              stepConditions.push({
+                '$CurrentStep.step_level$': 3
+              });
+            }
+
+            // Step 4 (HSE Manager): no additional filter, all HSE approval requests visible
+            if (canApproveHSE) {
+              stepConditions.push({
+                '$CurrentStep.step_level$': 4
+              });
+            }
+
+            // Apply OR conditions if we have multiple step filters
+            if (stepConditions.length > 0) {
+              // If user can approve multiple steps, use OR to combine conditions
+              if (stepConditions.length > 1) {
+                queryOptions.where[Op.or] = stepConditions;
+              } else {
+                // If only one step condition, apply it directly
+                Object.assign(queryOptions.where, stepConditions[0]);
               }
             }
 
