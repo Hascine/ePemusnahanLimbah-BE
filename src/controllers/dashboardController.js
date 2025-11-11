@@ -147,23 +147,36 @@ exports.getDashboardStats = async (req, res) => {
             }
         }
 
-        // 3. Count "Approved" - requests that user has already approved
-        // This should match the logic in permohonanController for processedBy
+        // 3. Count "Approved" - requests that user has already processed (approved or rejected) at their step
+        // Show ALL requests where user has approved or rejected at ANY step that matches their approval authority
+        // EXCEPT if current step also needs user's approval and hasn't been processed yet
+        // (in that case, it should be in Pending Approvals instead)
         let approvedCount = 0;
         
-        if (hasApprovalAuthority) {
+        if (hasApprovalAuthority && userApprovals.length > 0) {
             try {
-                // Count distinct requests where:
-                // - User appears in ApprovalHistory as approver_id or approver_id_delegated
-                // - Status is 'Approved' or 'Rejected' (processed by user)
-                // - Exclude requests created by the user themselves
-                const approvedRequests = await PermohonanPemusnahanLimbah.count({
-                    distinct: true,
-                    col: 'request_id',
+                // Get step levels this user can approve
+                const userApprovalSteps = userApprovals
+                    .map(item => item.Appr_No)
+                    .filter(stepNo => stepNo != null);
+                
+                // Get all requests where user has processed (approved or rejected) at their step level
+                const approvedRequests = await PermohonanPemusnahanLimbah.findAll({
                     include: [
                         {
                             model: ApprovalHistory,
                             required: true,
+                            include: [
+                                {
+                                    model: ApprovalWorkflowStep,
+                                    required: true,
+                                    where: {
+                                        step_level: {
+                                            [Op.in]: userApprovalSteps
+                                        }
+                                    }
+                                }
+                            ],
                             where: {
                                 [Op.and]: [
                                     {
@@ -172,17 +185,55 @@ exports.getDashboardStats = async (req, res) => {
                                             { approver_id_delegated: userId }
                                         ]
                                     },
-                                    { status: { [Op.in]: ['Approved', 'Rejected'] } }
+                                    { 
+                                        status: { 
+                                            [Op.in]: ['Approved', 'Rejected'] 
+                                        } 
+                                    }
                                 ]
                             }
+                        },
+                        {
+                            model: ApprovalWorkflowStep,
+                            as: 'CurrentStep',
+                            required: false
                         }
                     ],
                     where: {
-                        requester_id: { [Op.ne]: userId } // Exclude own requests
+                        requester_id: { [Op.ne]: userId }
                     }
                 });
 
-                approvedCount = approvedRequests;
+                // Filter out requests where current step needs user's approval but hasn't been processed yet
+                // (those should be in Pending Approvals)
+                const filteredApproved = approvedRequests.filter(request => {
+                    // If no current step (completed), always show in Approved
+                    if (!request.current_step_id || !request.CurrentStep) {
+                        return true;
+                    }
+                    
+                    const currentStepLevel = request.CurrentStep.step_level;
+                    
+                    // If current step is not in user's approval authority, show in Approved
+                    if (!userApprovalSteps.includes(currentStepLevel)) {
+                        return true;
+                    }
+                    
+                    // Current step needs user's approval - check if already processed
+                    const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
+                    const hasProcessedCurrentStep = histories.some(h => {
+                        const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+                        const matchesUser = approverIds.includes(String(userId));
+                        const isProcessed = ['Approved', 'Rejected'].includes(h.status);
+                        const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
+                        return matchesUser && isProcessed && matchesCurrentStep;
+                    });
+                    
+                    // Only show in Approved if user has already processed current step
+                    return hasProcessedCurrentStep;
+                });
+
+                approvedCount = filteredApproved.length;
             } catch (approvedError) {
                 console.error('[getDashboardStats] Error checking approved count:', approvedError.message);
                 approvedCount = 0;

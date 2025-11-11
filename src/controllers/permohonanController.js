@@ -111,9 +111,11 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
         const qualifies = userApprovals.some(a => {
           if (a.Appr_No !== 3) return false;
           const dept = (a.Appr_DeptID || '').toString().toUpperCase();
-          // If dept is KL -> HSE side; if dept matches requesterDept -> pemohon side
+          // User can be HSE side if dept is KL
           const isHSE = dept === 'KL';
+          // User can be Pemohon side if dept matches requester's department
           const isPemohon = requestDepartment && dept === String(requestDepartment).toUpperCase();
+          // Note: HSE can also be pemohon if they submitted the request (bagian = KL)
           if (!isHSE && !isPemohon) return false;
           // job level info may not be present in external item; best-effort: treat Appr_CC or other hints as acceptable
           // If external data contains job level (rare), prefer it
@@ -346,13 +348,12 @@ const getAllPermohonan = async (req, res) => {
       queryOptions.where.requester_id = filteringUser.log_NIK;
     }
 
-    // Filter to requests processed (approved/rejected) by the current user
-    // This is used by the frontend "Approved" tab: only show requests where
-    // the current user has an ApprovalHistory entry (approved or rejected) and
-    // exclude requests they themselves created.
+    // Filter to requests processed (approved or rejected) by the current user
+    // This is used by the frontend "Approved" tab: show ALL requests where
+    // the current user has an ApprovalHistory entry (Approved or Rejected)
+    // at ANY step that matches their approval authority, regardless of whether
+    // the request is still InProgress or already Completed.
     if (processedBy === 'true' || processedBy === true) {
-      // Join ApprovalHistory and require that approver_id or approver_id_delegated
-      // equals the filtering user's ID and status in Approved/Rejected.
       queryOptions.include.push({
         model: ApprovalHistory,
         required: true,
@@ -364,7 +365,11 @@ const getAllPermohonan = async (req, res) => {
                 { approver_id_delegated: filteringUser.log_NIK }
               ]
             },
-            { status: { [Op.in]: ['Approved', 'Rejected'] } }
+            { 
+              status: { 
+                [Op.in]: ['Approved', 'Rejected'] 
+              } 
+            }
           ]
         }
       });
@@ -572,31 +577,102 @@ const getAllPermohonan = async (req, res) => {
     }
 
     // For pending approvals, exclude requests that the current user has already processed
+    // IMPORTANT: For users who approve multiple steps (e.g., HSE Manager on step 1 and 4),
+    // only exclude if they processed the CURRENT step. If they approved step 1 and current
+    // is step 4, they should still see it in pending.
     if (pendingApproval === 'true' || pendingApproval === true) {
-      // Add a subquery to exclude requests where the user already has an approval history entry
-      const Op = require('sequelize').Op;
-      queryOptions.where[Op.and] = queryOptions.where[Op.and] || [];
-      queryOptions.where[Op.and].push({
-        request_id: {
-          [Op.notIn]: sequelize.literal(`(
-            SELECT DISTINCT "request_id" 
-            FROM "approval_history" 
-            WHERE ("approver_id" = '${filteringUser.log_NIK}' OR "approver_id_delegated" = '${filteringUser.log_NIK}')
-            AND "status" IN ('Approved', 'Rejected')
-          )`)
-        }
-      });
+      // We'll do post-processing instead of subquery to check current_step_id
+      // The subquery approach doesn't work well with current_step_id filtering
+      // So we fetch all and filter in memory
     }
 
     const { count, rows: permohonanList } = await PermohonanPemusnahanLimbah.findAndCountAll(queryOptions);
     
-    const totalPages = Math.ceil(count / parseInt(limit));
+    // Post-processing filters for both pendingApproval and processedBy
+    // Important: For users who approve multiple steps (e.g., HSE Manager on step 1 and 4),
+    // we only check current step, not any previous steps they may have approved.
+    let filteredList = permohonanList;
+    let filteredCount = count;
+    
+    if (pendingApproval === 'true' || pendingApproval === true) {
+      // Pending: exclude only if user approved CURRENT step
+      filteredList = filteredList.filter(request => {
+        const currentStepId = request.current_step_id;
+        const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
+        
+        // Check if user has already processed the CURRENT step
+        const hasProcessedCurrentStep = histories.some(h => {
+          const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+          const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
+          const isProcessed = ['Approved', 'Rejected'].includes(h.status);
+          const matchesCurrentStep = currentStepId && String(h.step_id) === String(currentStepId);
+          
+          return matchesUser && isProcessed && matchesCurrentStep;
+        });
+        
+        // Only show if they haven't processed current step
+        return !hasProcessedCurrentStep;
+      });
+      
+      filteredCount = filteredList.length;
+    }
+    
+    if (processedBy === 'true' || processedBy === true) {
+      // Approved: show ALL requests where user has approved OR rejected at their step
+      // EXCEPT if current step also needs user's approval but hasn't been processed yet
+      // (in that case, it should be in Pending Approvals instead)
+      
+      // Need to fetch user's approval authority to check current step
+      try {
+        const axios = require('axios');
+        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+        const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+        const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+        const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
+        const userApprovals = appItems.filter(item => item.Appr_ID === filteringUser.log_NIK);
+        const userApprovalSteps = userApprovals.map(item => item.Appr_No).filter(stepNo => stepNo != null);
+        
+        filteredList = filteredList.filter(request => {
+          // If no current step (completed/rejected), always show in Processed
+          if (!request.current_step_id || !request.CurrentStep) {
+            return true;
+          }
+          
+          const currentStepLevel = request.CurrentStep.step_level;
+          
+          // If current step is not in user's approval authority, show in Processed
+          if (!userApprovalSteps.includes(currentStepLevel)) {
+            return true;
+          }
+          
+          // Current step needs user's approval - check if already processed (approved or rejected)
+          const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
+          const hasProcessedCurrentStep = histories.some(h => {
+            const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+            const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
+            const isProcessed = ['Approved', 'Rejected'].includes(h.status);
+            const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
+            return matchesUser && isProcessed && matchesCurrentStep;
+          });
+          
+          // Only show in Processed if user has already processed current step
+          return hasProcessedCurrentStep;
+        });
+      } catch (apiError) {
+        console.warn('[processedBy filter] External API check failed:', apiError.message);
+        // If API fails, just show all processed requests without filtering
+      }
+      
+      filteredCount = filteredList.length;
+    }
+    
+    const totalPages = Math.ceil(filteredCount / parseInt(limit));
     
     res.status(200).json({
       success: true,
-      data: permohonanList,
+      data: filteredList,
       pagination: {
-        total: count,
+        total: filteredCount,
         page: parseInt(page),
         limit: parseInt(limit),
         totalPages: totalPages
@@ -637,16 +713,36 @@ const getPermohonanById = async (req, res) => {
     }
 
     // Determine whether the logged-in user (req.user) has processed this request
+    // Important: For users who need to approve multiple steps (e.g., HSE Manager for both
+    // Department Manager step and HSE Manager step), we only check if they've processed
+    // the CURRENT step, not any previous steps.
     const filteringUser = req.user;
     let processedByCurrentUser = false;
     try {
       const histories = Array.isArray(permohonan.ApprovalHistories) ? permohonan.ApprovalHistories : [];
-      processedByCurrentUser = histories.some(h => {
-        const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
-        return approverIds.includes(String(filteringUser.log_NIK)) && ['Approved', 'Rejected'].includes(h.status);
-      });
+      const currentStepId = permohonan.current_step_id;
+      
+      if (currentStepId) {
+        processedByCurrentUser = histories.some(h => {
+          const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+          const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
+          const isProcessed = ['Approved', 'Rejected'].includes(h.status);
+          // Only consider as processed if they approved/rejected the CURRENT step
+          // Use String comparison to avoid type mismatch issues
+          const matchesCurrentStep = String(h.step_id) === String(currentStepId);
+          
+          return matchesUser && isProcessed && matchesCurrentStep;
+        });
+      } else {
+        // If no current step (e.g., Draft or Completed), check any history
+        processedByCurrentUser = histories.some(h => {
+          const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+          return approverIds.includes(String(filteringUser.log_NIK)) && ['Approved', 'Rejected'].includes(h.status);
+        });
+      }
     } catch (e) {
       // Non-fatal; default to false
+      console.error('[getPermohonanById] Error checking processedByCurrentUser:', e);
       processedByCurrentUser = false;
     }
 
