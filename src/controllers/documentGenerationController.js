@@ -1,4 +1,5 @@
 const ExcelJS = require('exceljs');
+const axios = require('axios');
 const {
     PermohonanPemusnahanLimbah,
     DetailLimbah,
@@ -11,6 +12,32 @@ const {
     SigningWorkflowStep
 } = require('../models');
 const jakartaTime = require('../utils/jakartaTime');
+
+/**
+ * Helper function to fetch Inisial_Name from external API
+ * @param {string} userId - The user ID (NIK)
+ * @returns {Promise<string>} - The Inisial_Name or userId if not found
+ */
+const getInisialName = async (userId) => {
+    if (!userId) return '';
+    
+    try {
+        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+        const response = await axios.get(EXTERNAL_APPROVAL_URL);
+        const items = Array.isArray(response.data) ? response.data : response.data?.data || [];
+        
+        // Find the user by Appr_ID matching userId
+        const userRecord = items.find(item => 
+            String(item.Appr_ID) === String(userId) && 
+            String(item.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah'
+        );
+        
+        return userRecord?.Inisial_Name || userId;
+    } catch (error) {
+        console.warn(`Failed to fetch Inisial_Name for user ${userId}:`, error.message);
+        return userId; // Fallback to userId if API call fails
+    }
+};
 
 /**
  * GET /api/document-generation/permohonan/:id
@@ -153,6 +180,53 @@ const getPermohonanDataForDoc = async (req, res) => {
         const rejection = permohonan.ApprovalHistories.find(h => h.status === 'Rejected');
         const alasan_reject = rejection ? rejection.comments : permohonan.alasan_penolakan || '';
         
+        // --- Fetch Inisial_Name for all user IDs ---
+        // Collect all unique user IDs that need Inisial_Name lookup
+        const userIds = new Set();
+        
+        // Add verification user IDs
+        if (verifikasi.pelaksana_pemohon.paraf) userIds.add(verifikasi.pelaksana_pemohon.paraf);
+        if (verifikasi.supervisor_pemohon.paraf) userIds.add(verifikasi.supervisor_pemohon.paraf);
+        if (verifikasi.pelaksana_hse.paraf) userIds.add(verifikasi.pelaksana_hse.paraf);
+        if (verifikasi.supervisor_hse.paraf) userIds.add(verifikasi.supervisor_hse.paraf);
+        
+        // Add signature user IDs
+        if (penyerah.paraf) userIds.add(penyerah.paraf);
+        if (penyerah.user) userIds.add(penyerah.user);
+        if (menyetujui_apj_qa.paraf) userIds.add(menyetujui_apj_qa.paraf);
+        if (menyetujui_apj_qa.user) userIds.add(menyetujui_apj_qa.user);
+        if (menyetujui_apj_pn.paraf) userIds.add(menyetujui_apj_pn.paraf);
+        if (menyetujui_apj_pn.user) userIds.add(menyetujui_apj_pn.user);
+        if (menyetujui_pjkpo.paraf) userIds.add(menyetujui_pjkpo.paraf);
+        if (menyetujui_pjkpo.user) userIds.add(menyetujui_pjkpo.user);
+        if (mengetahui.paraf) userIds.add(mengetahui.paraf);
+        if (mengetahui.user) userIds.add(mengetahui.user);
+        
+        // Fetch Inisial_Name for all user IDs in parallel
+        const inisialNameMap = {};
+        await Promise.all(
+            Array.from(userIds).map(async (userId) => {
+                inisialNameMap[userId] = await getInisialName(userId);
+            })
+        );
+        
+        // Replace user IDs with Inisial_Name
+        verifikasi.pelaksana_pemohon.paraf = inisialNameMap[verifikasi.pelaksana_pemohon.paraf] || verifikasi.pelaksana_pemohon.paraf;
+        verifikasi.supervisor_pemohon.paraf = inisialNameMap[verifikasi.supervisor_pemohon.paraf] || verifikasi.supervisor_pemohon.paraf;
+        verifikasi.pelaksana_hse.paraf = inisialNameMap[verifikasi.pelaksana_hse.paraf] || verifikasi.pelaksana_hse.paraf;
+        verifikasi.supervisor_hse.paraf = inisialNameMap[verifikasi.supervisor_hse.paraf] || verifikasi.supervisor_hse.paraf;
+        
+        penyerah.paraf = inisialNameMap[penyerah.paraf] || penyerah.paraf;
+        penyerah.user = inisialNameMap[penyerah.user] || penyerah.user;
+        menyetujui_apj_qa.paraf = inisialNameMap[menyetujui_apj_qa.paraf] || menyetujui_apj_qa.paraf;
+        menyetujui_apj_qa.user = inisialNameMap[menyetujui_apj_qa.user] || menyetujui_apj_qa.user;
+        menyetujui_apj_pn.paraf = inisialNameMap[menyetujui_apj_pn.paraf] || menyetujui_apj_pn.paraf;
+        menyetujui_apj_pn.user = inisialNameMap[menyetujui_apj_pn.user] || menyetujui_apj_pn.user;
+        menyetujui_pjkpo.paraf = inisialNameMap[menyetujui_pjkpo.paraf] || menyetujui_pjkpo.paraf;
+        menyetujui_pjkpo.user = inisialNameMap[menyetujui_pjkpo.user] || menyetujui_pjkpo.user;
+        mengetahui.paraf = inisialNameMap[mengetahui.paraf] || mengetahui.paraf;
+        mengetahui.user = inisialNameMap[mengetahui.user] || mengetahui.user;
+        
             const docData = {
             is_padat: bentuk_limbah_padat,
             is_cair: bentuk_limbah_cair,
@@ -271,9 +345,10 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
 
         // --- Signatures ---
         // hse_supervisor_officer is the creator from berita_acara table, not from signing workflow
+        // Use creator_id instead of creator_name to fetch Inisial_Name
         const hse_supervisor_officer = { 
-            nama: beritaAcara.creator_name_delegated || '', 
-            user: beritaAcara.creator_name || '', 
+            nama: beritaAcara.creator_id_delegated || '', 
+            user: beritaAcara.creator_id || '', 
             tgl: beritaAcara.created_at 
         };
 
@@ -292,17 +367,18 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
             const signerJabatan = h.signer_jabatan || '';
 
             // Process signers from signing workflow steps
+            // Use signer_id instead of signer_name to fetch Inisial_Name
             switch (stepName) {
                 case 'HSE Manager Signature':
-                    hse_manager.nama = h.signer_name_delegated || '';
-                    hse_manager.user = h.signer_name || '';
-                    // If no delegation, show nama as the signer_name for backwards compatibility
+                    hse_manager.nama = h.signer_id_delegated || '';
+                    hse_manager.user = h.signer_id || '';
+                    // If no delegation, show nama as the signer_id for backwards compatibility
                     if (!hse_manager.nama && hse_manager.user) hse_manager.nama = hse_manager.user;
                     hse_manager.tgl = h.signed_at;
                     break;
                 case 'Department Manager Signature':
-                    manager_pemohon.nama = h.signer_name_delegated || '';
-                    manager_pemohon.user = h.signer_name || '';
+                    manager_pemohon.nama = h.signer_id_delegated || '';
+                    manager_pemohon.user = h.signer_id || '';
                     if (!manager_pemohon.nama && manager_pemohon.user) manager_pemohon.nama = manager_pemohon.user;
                     manager_pemohon.tgl = h.signed_at;
                     break;
@@ -311,25 +387,25 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
                 case 'PJKPO Signature':
                     // Handle APJ signatures with role markers (new system) or step names (legacy)
                     if (signerJabatan.includes('APJ_ROLE:QA') || stepName === 'APJ QA Signature') {
-                        apj_qa.nama = h.signer_name_delegated || '';
-                        apj_qa.user = h.signer_name || '';
+                        apj_qa.nama = h.signer_id_delegated || '';
+                        apj_qa.user = h.signer_id || '';
                         if (!apj_qa.nama && apj_qa.user) apj_qa.nama = apj_qa.user;
                         apj_qa.tgl = h.signed_at;
                     } else if (signerJabatan.includes('APJ_ROLE:PN') || stepName === 'APJ PN Signature') {
-                        apj_pn.nama = h.signer_name_delegated || '';
-                        apj_pn.user = h.signer_name || '';
+                        apj_pn.nama = h.signer_id_delegated || '';
+                        apj_pn.user = h.signer_id || '';
                         if (!apj_pn.nama && apj_pn.user) apj_pn.nama = apj_pn.user;
                         apj_pn.tgl = h.signed_at;
                     } else if (signerJabatan.includes('APJ_ROLE:HC') || stepName === 'PJKPO Signature') {
-                        pjkpo.nama = h.signer_name_delegated || '';
-                        pjkpo.user = h.signer_name || '';
+                        pjkpo.nama = h.signer_id_delegated || '';
+                        pjkpo.user = h.signer_id || '';
                         if (!pjkpo.nama && pjkpo.user) pjkpo.nama = pjkpo.user;
                         pjkpo.tgl = h.signed_at;
                     }
                     break;
                 case 'Head of Plant Signature':
-                    head_of_plant.nama = h.signer_name_delegated || '';
-                    head_of_plant.user = h.signer_name || '';
+                    head_of_plant.nama = h.signer_id_delegated || '';
+                    head_of_plant.user = h.signer_id || '';
                     if (!head_of_plant.nama && head_of_plant.user) head_of_plant.nama = head_of_plant.user;
                     head_of_plant.tgl = h.signed_at;
                     break;
@@ -338,24 +414,24 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
                     // This covers new role-based signing system
                     if (stepLevel === 3) {
                         if (signerJabatan.includes('APJ_ROLE:QA')) {
-                            apj_qa.nama = h.signer_name_delegated || '';
-                            apj_qa.user = h.signer_name || '';
+                            apj_qa.nama = h.signer_id_delegated || '';
+                            apj_qa.user = h.signer_id || '';
                             if (!apj_qa.nama && apj_qa.user) apj_qa.nama = apj_qa.user;
                             apj_qa.tgl = h.signed_at;
                         } else if (signerJabatan.includes('APJ_ROLE:PN')) {
-                            apj_pn.nama = h.signer_name_delegated || '';
-                            apj_pn.user = h.signer_name || '';
+                            apj_pn.nama = h.signer_id_delegated || '';
+                            apj_pn.user = h.signer_id || '';
                             if (!apj_pn.nama && apj_pn.user) apj_pn.nama = apj_pn.user;
                             apj_pn.tgl = h.signed_at;
                         } else if (signerJabatan.includes('APJ_ROLE:HC')) {
-                            pjkpo.nama = h.signer_name_delegated || '';
-                            pjkpo.user = h.signer_name || '';
+                            pjkpo.nama = h.signer_id_delegated || '';
+                            pjkpo.user = h.signer_id || '';
                             if (!pjkpo.nama && pjkpo.user) pjkpo.nama = pjkpo.user;
                             pjkpo.tgl = h.signed_at;
                         } else {
                             // Non-APJ role at level 3 (like Department Manager)
-                            manager_pemohon.nama = h.signer_name_delegated || '';
-                            manager_pemohon.user = h.signer_name || '';
+                            manager_pemohon.nama = h.signer_id_delegated || '';
+                            manager_pemohon.user = h.signer_id || '';
                             if (!manager_pemohon.nama && manager_pemohon.user) manager_pemohon.nama = manager_pemohon.user;
                             manager_pemohon.tgl = h.signed_at;
                         }
@@ -363,6 +439,50 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
                     break;
             }
         });
+
+        // --- Fetch Inisial_Name for all user names/IDs ---
+        // Collect all unique user names/IDs that need Inisial_Name lookup
+        const userIds = new Set();
+        
+        // Add signature user names/IDs
+        if (hse_supervisor_officer.nama) userIds.add(hse_supervisor_officer.nama);
+        if (hse_supervisor_officer.user) userIds.add(hse_supervisor_officer.user);
+        if (hse_manager.nama) userIds.add(hse_manager.nama);
+        if (hse_manager.user) userIds.add(hse_manager.user);
+        if (manager_pemohon.nama) userIds.add(manager_pemohon.nama);
+        if (manager_pemohon.user) userIds.add(manager_pemohon.user);
+        if (apj_qa.nama) userIds.add(apj_qa.nama);
+        if (apj_qa.user) userIds.add(apj_qa.user);
+        if (apj_pn.nama) userIds.add(apj_pn.nama);
+        if (apj_pn.user) userIds.add(apj_pn.user);
+        if (pjkpo.nama) userIds.add(pjkpo.nama);
+        if (pjkpo.user) userIds.add(pjkpo.user);
+        if (head_of_plant.nama) userIds.add(head_of_plant.nama);
+        if (head_of_plant.user) userIds.add(head_of_plant.user);
+        
+        // Fetch Inisial_Name for all user IDs in parallel
+        const inisialNameMap = {};
+        await Promise.all(
+            Array.from(userIds).map(async (userId) => {
+                inisialNameMap[userId] = await getInisialName(userId);
+            })
+        );
+        
+        // Replace user names/IDs with Inisial_Name
+        hse_supervisor_officer.nama = inisialNameMap[hse_supervisor_officer.nama] || hse_supervisor_officer.nama;
+        hse_supervisor_officer.user = inisialNameMap[hse_supervisor_officer.user] || hse_supervisor_officer.user;
+        hse_manager.nama = inisialNameMap[hse_manager.nama] || hse_manager.nama;
+        hse_manager.user = inisialNameMap[hse_manager.user] || hse_manager.user;
+        manager_pemohon.nama = inisialNameMap[manager_pemohon.nama] || manager_pemohon.nama;
+        manager_pemohon.user = inisialNameMap[manager_pemohon.user] || manager_pemohon.user;
+        apj_qa.nama = inisialNameMap[apj_qa.nama] || apj_qa.nama;
+        apj_qa.user = inisialNameMap[apj_qa.user] || apj_qa.user;
+        apj_pn.nama = inisialNameMap[apj_pn.nama] || apj_pn.nama;
+        apj_pn.user = inisialNameMap[apj_pn.user] || apj_pn.user;
+        pjkpo.nama = inisialNameMap[pjkpo.nama] || pjkpo.nama;
+        pjkpo.user = inisialNameMap[pjkpo.user] || pjkpo.user;
+        head_of_plant.nama = inisialNameMap[head_of_plant.nama] || head_of_plant.nama;
+        head_of_plant.user = inisialNameMap[head_of_plant.user] || head_of_plant.user;
 
         // --- Final JSON Response ---
         const docData = {
