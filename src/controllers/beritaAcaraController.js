@@ -632,6 +632,7 @@ const getAllBeritaAcara = async (req, res) => {
       offset: offset,
       order: [["tanggal", "DESC"]],
       where: whereClause,
+      distinct: true, // Count distinct BeritaAcara records only, not joined rows
       include: [
         {
           model: SigningWorkflow,
