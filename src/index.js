@@ -41,6 +41,7 @@ const startServer = async () => {
     const labelRoutes = require("./routes/labelRoutes");
     const userRoutes = require("./routes/userRoutes");
     const documentGenerationRoutes = require("./routes/documentGenerationRoutes");
+    const dashboardRoutes = require("./routes/dashboardRoutes");
 
     // 2. Use the routes with their base paths
     app.use("/api/auth", authRoutes);
@@ -52,6 +53,7 @@ const startServer = async () => {
     app.use("/api/labels", labelRoutes);
     app.use("/api/users", userRoutes);
     app.use("/api/document-generation", documentGenerationRoutes);
+    app.use("/api/dashboard", dashboardRoutes);
 
     // --- Health Check (Optional, as sequelize.authenticate() already checks) ---
     app.get("/health", (req, res) => {
