@@ -376,6 +376,16 @@ const getAllPermohonan = async (req, res) => {
 
       // Exclude requests created by the same user
       queryOptions.where.requester_id = { [Op.ne]: filteringUser.log_NIK };
+      
+      // Add CurrentStep for post-processing check
+      if (!queryOptions.include.some(inc => inc.as === 'CurrentStep')) {
+        queryOptions.include.push({
+          model: ApprovalWorkflowStep,
+          as: 'CurrentStep',
+          required: false,
+          include: [ApprovalWorkflowApprover]
+        });
+      }
     }
 
     // Enhanced pendingApproval filtering with external API
@@ -586,7 +596,18 @@ const getAllPermohonan = async (req, res) => {
       // So we fetch all and filter in memory
     }
 
-    const { count, rows: permohonanList } = await PermohonanPemusnahanLimbah.findAndCountAll(queryOptions);
+    // For processedBy, we need to remove pagination from query and do it after filtering
+    // because the filtering logic requires post-processing
+    const needsPostProcessing = (processedBy === 'true' || processedBy === true);
+    let queryOptionsForDB = { ...queryOptions };
+    
+    if (needsPostProcessing) {
+      // Remove limit and offset for initial query
+      delete queryOptionsForDB.limit;
+      delete queryOptionsForDB.offset;
+    }
+
+    const { count, rows: permohonanList } = await PermohonanPemusnahanLimbah.findAndCountAll(queryOptionsForDB);
     
     // Post-processing filters for both pendingApproval and processedBy
     // Important: For users who approve multiple steps (e.g., HSE Manager on step 1 and 4),
@@ -658,12 +679,20 @@ const getAllPermohonan = async (req, res) => {
           // Only show in Processed if user has already processed current step
           return hasProcessedCurrentStep;
         });
+        
+        filteredCount = filteredList.length;
       } catch (apiError) {
         console.warn('[processedBy filter] External API check failed:', apiError.message);
         // If API fails, just show all processed requests without filtering
+        filteredCount = filteredList.length;
       }
-      
-      filteredCount = filteredList.length;
+    }
+    
+    // Apply pagination AFTER filtering for processedBy
+    if (needsPostProcessing && filteredList.length > 0) {
+      const startIndex = offset;
+      const endIndex = offset + parseInt(limit);
+      filteredList = filteredList.slice(startIndex, endIndex);
     }
     
     const totalPages = Math.ceil(filteredCount / parseInt(limit));
