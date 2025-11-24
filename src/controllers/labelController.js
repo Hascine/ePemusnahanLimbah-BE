@@ -93,8 +93,16 @@ const generateLabelsForRequest = async (req, res) => {
 
         // Generate label data for each unique container
         const labels = uniqueWadahNumbers.map(wadahNumber => {
-            // Find the detail_limbah entry for this container
-            const detailForWadah = request.DetailLimbahs.find(detail => detail.nomor_wadah === wadahNumber);
+            // Find ALL detail_limbah entries for this container
+            const detailsForWadah = request.DetailLimbahs.filter(detail => detail.nomor_wadah === wadahNumber);
+            
+            // Get the first detail for reference data (nama_limbah, satuan, etc.)
+            const detailForWadah = detailsForWadah[0];
+            
+            // Sum all bobot values for this wadah
+            const bobotForWadah = detailsForWadah.reduce((sum, detail) => {
+                return sum + parseFloat(detail.bobot || 0);
+            }, 0).toFixed(2);
             
             return {
                 // Label identification
@@ -129,7 +137,7 @@ const generateLabelsForRequest = async (req, res) => {
                     nama_limbah: detailForWadah.nama_limbah,
                     jumlah_item: request.jumlah_item || (detailForWadah && detailForWadah.jumlah_item) || 0,
                     satuan: detailForWadah.satuan,
-                    bobot: parseFloat(totalBobot).toFixed(2),
+                    bobot: bobotForWadah,
                     nomor_analisa: detailForWadah.nomor_analisa,
                     nomor_referensi: detailForWadah.nomor_referensi,
                     alasan_pemusnahan: detailForWadah.alasan_pemusnahan
