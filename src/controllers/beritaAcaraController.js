@@ -21,7 +21,7 @@ const { Op } = require("sequelize");
 const Sequelize = require('sequelize');
 
 const jakartaTime = require("../utils/jakartaTime");
-const { getWorkflowNamesByGroup, getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } = require("../utils/golonganGroupMapping");
+const { getWorkflowNamesByGroup, getGolonganNamesByGroup, GOLONGAN_GROUP_MAP, determineGroupFromGolongan } = require("../utils/golonganGroupMapping");
 
 const { determineSigningWorkflow } = require("./workflowController");
 const { sendBapSigningNotification } = require("../utils/emailService");
@@ -434,7 +434,7 @@ const createBeritaAcara = async (req, res) => {
     //   - This prevents user from backdating or future-dating the BAP
     //   - Ensures: /available-requests = filter, createBeritaAcara = snapshot + linking
     // =========================================================================
-    const { waktu, lokasi_verifikasi, selectedRequestIds } = req.body;
+    const { waktu, lokasi_verifikasi, selectedRequestIds, golongan_group } = req.body;
     const { user, delegatedUser } = req;
 
     // Validate authenticated user presence
@@ -548,6 +548,35 @@ const createBeritaAcara = async (req, res) => {
       return res.status(404).json({ message: "No available requests found to generate a Berita Acara." });
     }
 
+    const selectedGolonganGroups = [
+      ...new Set(
+        availableRequests.map((r) => determineGroupFromGolongan(r.GolonganLimbah?.nama || r.GolonganLimbah?.golongan_name))
+      ),
+    ].filter(Boolean);
+
+    if (selectedGolonganGroups.length > 1) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: `Cannot create Berita Acara: selected requests contain multiple golongan groups (${selectedGolonganGroups.join(", ")}). Please select requests from one group only.`,
+      });
+    }
+
+    if (golongan_group) {
+      const requestedGolonganNames = getGolonganNamesByGroup(golongan_group);
+      if (!requestedGolonganNames) {
+        await transaction.rollback();
+        return res.status(400).json({ message: `Invalid golongan_group parameter: ${golongan_group}` });
+      }
+
+      const selectedGroup = selectedGolonganGroups[0];
+      if (selectedGroup && selectedGroup !== golongan_group) {
+        await transaction.rollback();
+        return res.status(400).json({
+          message: `Cannot create Berita Acara: selected requests are for ${selectedGroup}, but this form is for ${golongan_group}.`,
+        });
+      }
+    }
+
     // =========================================================================
     // GROUP VALIDATION FOR QA / PN1 CREATORS
     // =========================================================================
@@ -561,7 +590,7 @@ const createBeritaAcara = async (req, res) => {
         : (GOLONGAN_GROUP_MAP['recall-precursor'] || []).map(g => g.toLowerCase());
 
       const allRequestsMatch = availableRequests.every(r => {
-        const golName = (r.GolonganLimbah?.golongan_name || '').toLowerCase();
+        const golName = (r.GolonganLimbah?.nama || r.GolonganLimbah?.golongan_name || '').toLowerCase();
         return allowedGolonganNames.includes(golName);
       });
 
